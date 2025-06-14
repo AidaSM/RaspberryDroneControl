@@ -1,7 +1,7 @@
 from dronekit import connect, VehicleMode, Command
 import time
 
-class DroneController:
+class DroneControl:
     def __init__(self, connection_string='/dev/ttyAMA0', baud=115200):
         print("Connecting to drone...")
         self.vehicle = connect(connection_string, baud=baud, wait_ready=True)
