@@ -1,68 +1,46 @@
-import Camera
-class DroneController:
-    def __init__(self):
-        self.altitude = 0
-        self.is_flying = False
-        self.position = [0, 0]
-        self.gps_coords = (0.0, 0.0)
-        self.camera = Camera()
+from dronekit import connect, VehicleMode, Command
+import time
 
-    def takeoff(self, target_altitude=10):
-        if self.is_flying:
-            print("Drone is already flying.")
-        else:
-            self.altitude = target_altitude
-            self.is_flying = True
-            print(f"Taking off to {self.altitude} meters.")
+class DroneController:
+    def __init__(self, connection_string='/dev/ttyAMA0', baud=115200):
+        print("Connecting to drone...")
+        self.vehicle = connect(connection_string, baud=baud, wait_ready=True)
+        print("Connected.")
+
+    def arm_and_takeoff(self, target_altitude=2):
+        print("Arming motors...")
+        self.vehicle.mode = VehicleMode("GUIDED")
+        self.vehicle.armed = True
+
+        while not self.vehicle.armed:
+            print("Waiting for arming...")
+            time.sleep(1)
+
+        print("Taking off!")
+        self.vehicle.simple_takeoff(target_altitude)
+
+        while True:
+            alt = self.vehicle.location.global_relative_frame.alt
+            print(f"Altitude: {alt:.1f}")
+            if alt >= target_altitude * 0.95:
+                print("Reached target altitude.")
+                break
+            time.sleep(1)
 
     def land(self):
-        if not self.is_flying:
-            print("Drone is already landed.")
-        else:
-            self.altitude = 0
-            self.is_flying = False
-            print("Landing... Drone is on the ground.")
+        print("Landing...")
+        self.vehicle.mode = VehicleMode("LAND")
 
-    def move(self, direction, distance):
-        if not self.is_flying:
-            print("Drone is not flying. Can't move.")
-            return
+    def disarm(self):
+        print("Disarming...")
+        self.vehicle.armed = False
 
-        if direction == "forward":
-            self.position[1] += distance
-        elif direction == "backward":
-            self.position[1] -= distance
-        elif direction == "left":
-            self.position[0] -= distance
-        elif direction == "right":
-            self.position[0] += distance
-        else:
-            print("Unknown direction.")
-            return
+    def goto_location(self, lat, lon, alt):
+        from dronekit import LocationGlobalRelative
+        point = LocationGlobalRelative(lat, lon, alt)
+        self.vehicle.simple_goto(point)
 
-        print(f"Moving {direction} by {distance} meters. Current position: {self.position}")
+    def close(self):
+        self.vehicle.close()
+        print("Connection closed.")
 
-    def change_altitude(self, delta):
-        if not self.is_flying:
-            print("Drone is not flying. Can't change altitude.")
-            return
-
-        self.altitude += delta
-        if self.altitude < 0:
-            self.altitude = 0
-        print(f"Changing altitude by {delta} meters. Current altitude: {self.altitude}")
-
-    def hover(self):
-        if self.is_flying:
-            print(f"Hovering at altitude {self.altitude} meters, position {self.position}.")
-        else:
-            print("Drone is not flying.")
-
-
-    def update_gps(self, latitude, longitude):
-        self.gps_coords = (latitude, longitude)
-        print(f"GPS updated: Latitude {latitude}, Longitude {longitude}")
-
-    def get_gps_location(self):
-        print(f"Current GPS location: {self.gps_coords}")
-        return self.gps_coords
