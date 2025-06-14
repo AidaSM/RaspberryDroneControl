@@ -1,42 +1,48 @@
+from picamera2 import Picamera2, Preview
+import time
+import os
+
 class Camera:
-    def __init__(self):
-        self.is_on = False
-        self.is_recording = False
+    def __init__(self, resolution=(1920, 1080), framerate=30):
+        self.picam2 = Picamera2()
+        self.resolution = resolution
+        self.framerate = framerate
+        self.configure_camera()
 
-    def start(self):
-        if not self.is_on:
-            self.is_on = True
-            print("Camera started.")
-        else:
-            print("Camera is already on.")
+    def configure_camera(self):
+        camera_config = self.picam2.create_still_configuration(
+            main={"size": self.resolution}
+        )
+        self.picam2.configure(camera_config)
 
-    def stop(self):
-        if self.is_on:
-            if self.is_recording:
-                self.stop_recording()
-            self.is_on = False
-            print("Camera stopped.")
-        else:
-            print("Camera is already off.")
+    def start_preview(self, fullscreen=True, window=None):
+        self.picam2.start_preview(Preview.QT if fullscreen else Preview.NULL)
+        self.picam2.start()
+        print("Preview started...")
 
-    def take_photo(self):
-        if self.is_on:
-            print("Photo taken.")
-        else:
-            print("Camera is off. Can't take photo.")
+    def stop_preview(self):
+        self.picam2.stop_preview()
+        self.picam2.stop()
+        print("Preview stopped.")
 
-    def start_recording(self):
-        if self.is_on and not self.is_recording:
-            self.is_recording = True
-            print("Started video recording.")
-        elif not self.is_on:
-            print("Camera is off. Can't start recording.")
-        else:
-            print("Already recording.")
+    def capture_image(self, output_path="image.jpg"):
+        self.picam2.capture_file(output_path)
+        print(f"Image saved to {output_path}")
+
+    def start_recording(self, output_path="video.h264"):
+        video_config = self.picam2.create_video_configuration(main={"size": self.resolution, "fps": self.framerate})
+        self.picam2.configure(video_config)
+        self.picam2.start_recording(output_path)
+        print(f"Recording started to {output_path}")
 
     def stop_recording(self):
-        if self.is_recording:
-            self.is_recording = False
-            print("Stopped video recording.")
-        else:
-            print("Not recording.")
+        self.picam2.stop_recording()
+        print("Recording stopped.")
+
+# Example usage
+if __name__ == "__main__":
+    camera = Camera()
+    camera.start_preview()
+    time.sleep(2)  # Let the camera warm up
+    camera.capture_image("test.jpg")
+    camera.stop_preview()

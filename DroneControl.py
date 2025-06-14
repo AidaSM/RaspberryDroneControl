@@ -7,7 +7,7 @@ class DroneControl:
         self.vehicle = connect(connection_string, baud=baud, wait_ready=True)
         print("Connected.")
 
-    def arm_and_takeoff(self, target_altitude=2):
+    def arm_and_takeoff(self, target_altitude=0.5):
         print("Arming motors...")
         self.vehicle.mode = VehicleMode("GUIDED")
         self.vehicle.armed = True
