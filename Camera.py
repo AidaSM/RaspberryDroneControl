@@ -34,6 +34,8 @@ class Camera:
         self.picam2.configure(video_config)
         self.picam2.start_recording(output_path)
         print(f"Recording started to {output_path}")
+    def get_frame(self):
+        return self.picam2.capture_array()
 
     def stop_recording(self):
         self.picam2.stop_recording()
