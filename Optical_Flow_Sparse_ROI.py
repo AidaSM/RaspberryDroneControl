@@ -3,59 +3,59 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-# === Setare directoare pentru fișiere video ===
+# === Setup working directories (optional) ===
 current_directory = os.getcwd()
 parent_directory = os.path.dirname(current_directory)
 
-# === Inițializare cameră ===
-cap = cv2.VideoCapture(0)  # 0 = camera implicită
+# === Initialize camera ===
+cap = cv2.VideoCapture(0)  # 0 = default camera
 if not cap.isOpened():
     raise Exception("Camera not accessible")
 
-# Warming-up: se citesc câteva cadre pentru a stabiliza fluxul video
+# Warm-up: grab a few frames to stabilize video feed
 for _ in range(10):
     cap.read()
 
-# === Parametri Shi-Tomasi pentru detecția colțurilor ===
+# === Shi-Tomasi corner detection parameters ===
 shitomasi_params = dict(
-    maxCorners=100,         # număr maxim de puncte de interes
-    qualityLevel=0.5,       # calitatea minimă a colțului (0.0–1.0)
-    minDistance=7           # distanța minimă între colțuri
+    maxCorners=100,         # Maximum number of features
+    qualityLevel=0.5,       # Minimum quality of corners
+    minDistance=7           # Minimum distance between corners
 )
 
-# === Parametri Lucas-Kanade pentru urmărirea fluxului optic ===
+# === Lucas-Kanade Optical Flow parameters ===
 lk_params = dict(
-    winSize=(15, 15),       # dimensiunea ferestrei de căutare
-    maxLevel=2,             # numărul nivelurilor în piramida Gaussiană
+    winSize=(15, 15),       # Window size for searching
+    maxLevel=2,             # Number of pyramid levels
     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
 )
 
-# === Citirea primului cadru și extragerea colțurilor inițiale ===
+# === Read the first frame and extract initial feature points ===
 ret, frame = cap.read()
 if not ret:
     raise Exception("Failed to read from camera")
 
 frame_gray_init = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 edges = cv2.goodFeaturesToTrack(frame_gray_init, mask=None, **shitomasi_params)
-mask = np.zeros_like(frame)  # pentru desenarea vectorilor
+mask = np.zeros_like(frame)  # Used for drawing flow vectors
 
-# === Definirea zonei de interes (ROI) pentru decizie ===
+# === Define the Region of Interest (ROI) ===
 frame_height, frame_width = frame.shape[:2]
 middle_x, middle_y = frame_width // 2, frame_height // 2
-roi = [middle_x - 180, middle_y - 150, middle_x + 160, middle_y + 250]
+roi = [middle_x - 180, middle_y - 150, middle_x + 160, middle_y + 250]  # [x1, y1, x2, y2]
 
-# Prag de detecție pentru mișcare semnificativă
+# === Motion detection threshold ===
 displacement_threshold = 5
 
-# Liste pentru stocarea deplasărilor
+# === Lists to store displacement values for plotting ===
 avg_displacement_x_list = []
 avg_displacement_y_list = []
 displacement_x_list = []
 displacement_y_list = []
 
-frame_number = 0  # Contor cadru
+frame_number = 0  # Frame counter
 
-# === Buclă principală ===
+# === Main processing loop ===
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -64,14 +64,14 @@ while True:
     frame_number += 1
     frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Reinițializare puncte dacă se pierd
+    # Reinitialize tracking points if lost
     if edges is None or len(edges) < 5:
         print("Reinitializing features...")
         edges = cv2.goodFeaturesToTrack(frame_gray, mask=None, **shitomasi_params)
         frame_gray_init = frame_gray.copy()
         continue
 
-    # === Calculul fluxului optic (Lucas-Kanade) ===
+    # === Calculate optical flow using Lucas-Kanade method ===
     new_edges, status, errors = cv2.calcOpticalFlowPyrLK(
         frame_gray_init, frame_gray, edges, None, **lk_params)
 
@@ -86,21 +86,20 @@ while True:
         print("No good points tracked — skipping frame.")
         continue
 
-    # === Suprapunere: număr cadru și ROI ===
+    # === Overlay frame info and ROI ===
     cv2.putText(frame, f"Frame: {frame_number}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
     cv2.rectangle(frame, (roi[0], roi[1]), (roi[2], roi[3]), (0, 0, 0), 2)
 
-    obstacle_detected = False  # Indicator obstacol
+    obstacle_detected = False
 
-    # === Analiză deplasări punctuale ===
+    # === Analyze displacement of each tracked point ===
     for new, old in zip(good_new, good_old):
         x1, y1 = new.ravel()
         x2, y2 = old.ravel()
         dx = x1 - x2
         dy = y1 - y2
 
-        # Detectare mișcare semnificativă
         if abs(dx) > displacement_threshold or abs(dy) > displacement_threshold:
             obstacle_detected = True
             mask = cv2.arrowedLine(mask, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
@@ -108,7 +107,7 @@ while True:
             displacement_x_list.append(dx)
             displacement_y_list.append(dy)
 
-    # === Evaluarea mișcării în zona ROI ===
+    # === Check average motion in the ROI only ===
     roi_corners = good_new[
         (good_new[:, 0] >= roi[0]) & (good_new[:, 1] >= roi[1]) &
         (good_new[:, 0] <= roi[2]) & (good_new[:, 1] <= roi[3])
@@ -120,22 +119,20 @@ while True:
         avg_displacement_x_list.append(avg_dx)
         avg_displacement_y_list.append(avg_dy)
 
-        # Semnalizare obstacol în ROI
         if abs(avg_dx) > displacement_threshold or abs(avg_dy) > displacement_threshold:
             obstacle_detected = True
             for corner in roi_corners:
                 x, y = corner.ravel()
                 frame = cv2.circle(frame, (int(x), int(y)), 3, (0, 0, 0), thickness=-1)
 
-    # === Combinare mască + cadru pentru vizualizare ===
+    # === Display results ===
     output = cv2.add(frame, mask)
     cv2.imshow('Obstacle Detection', output)
 
-    # Ieșire la apăsarea tastei 'q'
     if cv2.waitKey(25) & 0xFF == ord('q'):
         break
 
-    # Actualizare referințe pentru următorul cadru
+    # Update reference for next frame
     frame_gray_init = frame_gray.copy()
     edges = good_new.reshape(-1, 1, 2)
 
@@ -143,12 +140,13 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 
-# === Vizualizare grafică a deplasărilor detectate ===
-plt.plot(displacement_x_list, label='Displacement X')
-plt.plot(displacement_y_list, label='Displacement Y')
-plt.plot(avg_displacement_x_list, label='Average Displacement X')
-plt.plot(avg_displacement_y_list, label='Average Displacement Y')
-plt.xlabel('Frame')
-plt.ylabel('Displacement')
-plt.legend()
-plt.show()
+# === Plot displacement statistics ===
+# plt.plot(displacement_x_list, label='Displacement X')
+# plt.plot(displacement_y_list, label='Displacement Y')
+# plt.plot(avg_displacement_x_list, label='Average Displacement X')
+# plt.plot(avg_displacement_y_list, label='Average Displacement Y')
+# plt.xlabel('Frame')
+# plt.ylabel('Displacement')
+# plt.legend()
+# plt.title('Motion Displacement Over Time')
+# plt.show()
