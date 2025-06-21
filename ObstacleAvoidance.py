@@ -1,103 +1,114 @@
 import cv2
 import numpy as np
+import time
+from dronekit import connect, VehicleMode
+from picamera2 import Picamera2
+
 
 class ObstacleAvoidance:
-    def __init__(self, camera_index=0, width=320, height=240):
-        """
-        Initializes the obstacle avoidance system using optical flow and color clustering.
-        - camera_index: index of the camera (default 0)
-        - width, height: frame dimensions for processing
-        """
-        self.cap = cv2.VideoCapture(camera_index)
-        if not self.cap.isOpened():
-            raise Exception("Camera nu poate fi accesat.")  # Camera not accessible
+    def __init__(self):
+        print("Connecting to ArduPilot...")
+        self.vehicle = connect('/dev/serial0', baud=115200, wait_ready=True)
+        print("Connected to vehicle.")
 
-        self.width = width
-        self.height = height
+        self.picam2 = Picamera2()
+        self.picam2.configure(self.picam2.create_preview_configuration(
+            main={"format": "BGR888", "size": (640, 480)}))
+        self.picam2.start()
+        time.sleep(1)
 
-        # Parameters for Lucas-Kanade Optical Flow
         self.lk_params = dict(winSize=(15, 15), maxLevel=2,
                               criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+        self.feature_params = dict(maxCorners=100, qualityLevel=0.3, minDistance=7, blockSize=7)
+        self.displacement_threshold = 5
 
-        # Parameters for Shi-Tomasi corner detection
-        self.shi_params = dict(maxCorners=100, qualityLevel=0.3, minDistance=7)
+        self.mode_changed = False
+        self.last_mode = self.vehicle.mode.name
 
-        # Criteria for K-means clustering
-        self.criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        self.K = 2  # Number of clusters
+        self.init_first_frame()
 
-        self._init_tracking()  # Initialize with first frame and tracking points
+    def init_first_frame(self):
+        frame = self.picam2.capture_array()
+        if frame is None:
+            raise Exception("Can't read from camera")
+        self.old_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        self.p0 = cv2.goodFeaturesToTrack(self.old_gray, mask=None, **self.feature_params)
 
-    def _init_tracking(self):
-        """
-        Captures the first frame, applies K-means clustering to identify a mask,
-        and detects good features to track.
-        """
-        ret, frame = self.cap.read()
-        if not ret:
-            raise Exception("Nu s-a putut citi primul cadru.")  # Could not read first frame
+    def run(self):
+        print("Starting vision-based obstacle detection. Press 'q' to quit.")
+        no_motion_start_time = None
+        clear_delay = 5  # seconds of confirmed "clear path" before resuming
 
-        # Resize and preprocess frame
-        self.prev_frame = cv2.resize(frame, (self.width, self.height))
-        rgb = cv2.cvtColor(self.prev_frame, cv2.COLOR_BGR2RGB)
-        pixels = rgb.reshape((-1, 3)).astype(np.float32)
+        try:
+            while True:
+                frame = self.picam2.capture_array()
+                if frame is None:
+                    continue
 
-        # Apply K-means clustering to segment image
-        _, labels, _ = cv2.kmeans(pixels, self.K, None, self.criteria, 10, cv2.KMEANS_PP_CENTERS)
-        labels_img = labels.reshape((self.height, self.width))
+                frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Select dominant cluster as the object mask
-        object_cluster = np.argmax(np.bincount(labels.flatten()))
-        self.mask_kmeans = np.uint8((labels_img == object_cluster) * 255)
+                if self.p0 is None or len(self.p0) < 10:
+                    self.p0 = cv2.goodFeaturesToTrack(self.old_gray, mask=None, **self.feature_params)
+                    self.old_gray = frame_gray.copy()
+                    continue
 
-        # Convert to grayscale and detect initial features
-        gray = cv2.cvtColor(self.prev_frame, cv2.COLOR_BGR2GRAY)
-        self.prev_pts = cv2.goodFeaturesToTrack(gray, mask=self.mask_kmeans, **self.shi_params)
-        self.prev_gray = gray
+                p1, st, err = cv2.calcOpticalFlowPyrLK(
+                    self.old_gray, frame_gray, self.p0, None, **self.lk_params)
 
-    def check_and_avoid(self):
-        """
-        Checks for motion between frames using optical flow.
-        If significant motion is detected, returns True (obstacle detected).
-        """
-        ret, frame = self.cap.read()
-        if not ret:
-            return False
+                if p1 is None or st is None:
+                    continue
 
-        # Resize and convert to grayscale
-        frame_small = cv2.resize(frame, (self.width, self.height))
-        gray = cv2.cvtColor(frame_small, cv2.COLOR_BGR2GRAY)
+                good_new = p1[st == 1]
+                good_old = self.p0[st == 1]
 
-        # If we lose tracking points, reinitialize them
-        if self.prev_pts is None or len(self.prev_pts) < 5:
-            self.prev_pts = cv2.goodFeaturesToTrack(gray, mask=self.mask_kmeans, **self.shi_params)
-            self.prev_gray = gray.copy()
-            return False
+                obstacle_detected = False
+                for new, old in zip(good_new, good_old):
+                    dx = new[0] - old[0]
+                    dy = new[1] - old[1]
+                    if abs(dx) > self.displacement_threshold or abs(dy) > self.displacement_threshold:
+                        obstacle_detected = True
+                        break
 
-        # Calculate optical flow between previous and current frame
-        next_pts, status, _ = cv2.calcOpticalFlowPyrLK(self.prev_gray, gray, self.prev_pts, None, **self.lk_params)
+                current_time = time.time()
 
-        if next_pts is not None and status is not None:
-            good_old = self.prev_pts[status == 1]
-            good_new = next_pts[status == 1]
+                if obstacle_detected:
+                    no_motion_start_time = None
+                    if not self.mode_changed:
+                        print("Obstacle detected! Switching to BRAKE mode.")
+                        self.vehicle.mode = VehicleMode("BRAKE")
+                        self.mode_changed = True
 
-            # Check for significant motion in any tracked point
-            for new, old in zip(good_new, good_old):
-                dx, dy = new.ravel() - old.ravel()
-                if abs(dx) > 2 or abs(dy) > 2:
-                    print("[AVOID] Obstacle detected.")
-                    self.prev_gray = gray.copy()
-                    self.prev_pts = good_new.reshape(-1, 1, 2)
-                    return True
+                else:
+                    if self.mode_changed:
+                        if no_motion_start_time is None:
+                            no_motion_start_time = current_time
+                        elif (current_time - no_motion_start_time) >= clear_delay:
+                            print(f"Path clear for {clear_delay} seconds. Resuming mode:", self.last_mode)
+                            self.vehicle.mode = VehicleMode(self.last_mode)
+                            self.mode_changed = False
+                            no_motion_start_time = None
 
-        # Update tracking state for next iteration
-        self.prev_gray = gray.copy()
-        self.prev_pts = next_pts.reshape(-1, 1, 2) if next_pts is not None else None
-        return False
+                # Draw optical flow
+                for new, old in zip(good_new, good_old):
+                    a, b = new.ravel()
+                    c, d = old.ravel()
+                    cv2.arrowedLine(frame, (int(c), int(d)), (int(a), int(b)), (0, 255, 0), 1)
 
-    def release(self):
-        """
-        Releases the camera and closes any OpenCV windows.
-        """
-        self.cap.release()
+                cv2.imshow("Obstacle Detection View", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+                self.old_gray = frame_gray.copy()
+                self.p0 = good_new.reshape(-1, 1, 2)
+
+        except KeyboardInterrupt:
+            print("Interrupted by user.")
+        finally:
+            self.shutdown()
+
+    def shutdown(self):
+        self.picam2.stop()
+        self.vehicle.close()
         cv2.destroyAllWindows()
+        print("System shut down cleanly.")
+
