@@ -3,7 +3,7 @@ import time
 import os
 
 class Camera:
-    def __init__(self, resolution=(1920, 1080), framerate=30):
+    def __init__(self, resolution=(640, 480), framerate=30):
         self.picam2 = Picamera2()
         self.resolution = resolution
         self.framerate = framerate
@@ -39,6 +39,7 @@ class Camera:
     def stop_recording(self):
         self.picam2.stop_recording()
         print("Recording stopped.")
+
 
 # Example usage
 if __name__ == "__main__":
